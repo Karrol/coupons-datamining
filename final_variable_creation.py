@@ -166,12 +166,12 @@ cust_transactions.shape#(1321650, 11)
 ##和交易数据进行连接，把merge函数的默认参数补上，how='inner'
 ##连接后只保留了两张表都有的顾客（customer_id）的数据
 """暂时注释掉，跑一次这个函数时间代价比较大"""
-#df_x=merge_with_chunk(df_x,cust_transactions,output_file_name='df_all_trans_item.csv',on_cloums=['customer_id'],how_tomerge='inner')
+df_x=merge_with_chunk(df_x,cust_transactions,output_file_name='df_all_trans_item.csv',on_cloums=['customer_id'],how_tomerge='inner')
 ##含义：要筛选出某顾客收到优惠券的生效日期大于该顾客购物交易日期的数据
 ##当df的cloumn被赋值之后，可以采用df_x.start_date来引用这一列
 #to do:debug here
 ##尝试pd能不能一次性带动900+M的文件->带不动，一定要分节读取df_x现在是个chunks
-df_x=pd.read_csv('df_all_trans_item.csv',chunksize=100000)
+#df_x=pd.read_csv('df_all_trans_item.csv',chunksize=100000)
 for chunk in df_x:
     ###相当于SELECT * FROM table WHERE start_date>chunk.date
     chunk = chunk[chunk.start_date > chunk.date]#这个可以剔除列不符合要求的行么？可以
@@ -236,7 +236,7 @@ cust_hist_trans.to_csv('cust_hist_trans.csv', index=False)
 
 # In[12]:
 
-
+##生成新表，代表每个顾客每天的消费
 cust_daily = cust_transactions.groupby(['date', 'customer_id']).agg({
     'item_id': 'count',
     'quantity': 'sum',
@@ -248,8 +248,9 @@ cust_daily = cust_transactions.groupby(['date', 'customer_id']).agg({
 
 # cust_daily.columns = ['_'.join(col).strip('_') for col in cust_daily.columns.values]
 cust_daily = cust_daily.reset_index()
+##依据日期合顾客id排序
 cust_daily = cust_daily.sort_values(by=['customer_id', 'date'])
-
+##对cust_daily做聚合函数，计算加权移动平均数，让近期的消费权重，数据就附加在cust_daily表上，因为是每个时刻（天）都做一个计算
 cust_daily['selling_price_ewm'] = cust_daily.groupby('customer_id')['selling_price'].apply(
     lambda x: x.ewm(com=0.5).mean()).tolist()
 cust_daily['coupon_discount_ewm'] = cust_daily.groupby('customer_id')['coupon_discount'].apply(
@@ -258,12 +259,13 @@ cust_daily['coupon_applied_ewm'] = cust_daily.groupby('customer_id')['coupon_app
     lambda x: x.ewm(com=0.5).mean()).tolist()
 
 # cust_daily.head()
-
+##合并训练测试数据集-顾客的每天消费数据，得到优惠券和顾客每天交易数据匹配的数据，并筛选出优惠券生效的数据
+###即顾客当天的交易数据，以及他拥有的优惠券，优惠券是否使用了
 df_x = df_all[['customer_id', 'start_date']].drop_duplicates().merge(cust_daily, on=['customer_id'])
 df_x = df_x[df_x.start_date > df_x.date]
 df_x = df_x.sort_values(by=['customer_id', 'start_date', 'date'])
 
-
+###使用聚合函数，实现对顾客从收到优惠券后的每天的交易数据的聚合数据
 cust_hist_trans_daily = df_x.groupby(['customer_id', 'start_date']).agg({
     'date': ['count'],
     'selling_price': ['mean', 'std', 'last'],
@@ -288,7 +290,7 @@ cust_hist_trans_daily.to_csv('cust_hist_trans_daily.csv', index=False)
 
 # In[14]:
 
-
+#获取归属于优惠券活动的商品-与顾客的交易数据，这张表中所有的商品都是参与优惠券活动的
 coup_trans = coupon_item_mapping.merge(cust_transactions, on='item_id', how='left')
 coup_trans.shape
 coup_trans.head()
@@ -296,12 +298,14 @@ coup_trans.head()
 
 # In[15]:
 
-
+#优惠券-活动开始日期，和用户交易数据合并，可以获得在促销活动中，顾客获取到的优惠券的商品的交易数据。cust_his_trans是所有商品的交易数据，一些商品可能并不能享受优惠券折扣
 df_x = df_all[['coupon_id', 'start_date']].drop_duplicates().merge(coup_trans, on='coupon_id', how='left')
 df_x = df_x[df_x.start_date > df_x.date]
 df_x = df_x.sort_values(by=['coupon_id', 'date'])
 df_x.shape
-
+##一样的套路，先筛选出活动期限内的消费数据（才有可能能够使用优惠券），并按照优惠券和交易日期排序
+##获得各个优惠券被顾客的使用情况
+##依据优惠券id和活动开始日期排序，统计从促销活动开始时不同优惠券的交易数据
 coup_hist_trans = df_x.groupby(['coupon_id', 'start_date']).agg({
             'item_id': ['count'],
             'selling_price': ['sum', 'mean', 'std'],
@@ -325,7 +329,7 @@ coup_hist_trans.to_csv('coup_hist_trans.csv', index=False)
 
 # In[17]:
 
-
+##依据优惠券id和交易日期排序，统计从不同优惠券每天的交易数据
 coup_daily = coup_trans.groupby(['coupon_id', 'date']).agg({
     'item_id': 'count',
     'quantity': 'sum',
@@ -338,7 +342,7 @@ coup_daily = coup_trans.groupby(['coupon_id', 'date']).agg({
 # cust_daily.columns = ['_'.join(col).strip('_') for col in cust_daily.columns.values]
 coup_daily = coup_daily.reset_index()
 coup_daily = coup_daily.sort_values(by=['coupon_id', 'date'])
-
+##再一次，为不同优惠券每天的交易数据加权移动平均
 coup_daily['selling_price_ewm'] = coup_daily.groupby('coupon_id')['selling_price'].apply(
     lambda x: x.ewm(com=0.5).mean()).tolist()
 coup_daily['coupon_discount_ewm'] = coup_daily.groupby('coupon_id')['coupon_discount'].apply(
@@ -346,12 +350,13 @@ coup_daily['coupon_discount_ewm'] = coup_daily.groupby('coupon_id')['coupon_disc
 coup_daily['coupon_applied_ewm'] = coup_daily.groupby('coupon_id')['coupon_applied'].apply(
     lambda x: x.ewm(com=0.5).mean()).tolist()
 
-
+##去重后再次依据coupon_id与已标记的训练数据合并
 df_x = df_all[['coupon_id', 'start_date']].drop_duplicates().merge(coup_daily, on=['coupon_id'])
+##之前按照coupon_id进行分组，现在筛选出在活动日期内的数据，
 df_x = df_x[df_x.start_date > df_x.date]
 df_x = df_x.sort_values(by=['coupon_id', 'start_date', 'date'])
 
-
+##优惠券的日交易数据
 coup_hist_trans_daily = df_x.groupby(['coupon_id', 'start_date']).agg({
     'date': ['count'],
     'selling_price': ['mean', 'std', 'last'],
