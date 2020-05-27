@@ -43,14 +43,6 @@ campaign_data['duration'] = (campaign_data.end_date - campaign_data.start_date).
 
 
 
-
-
-# In[ ]:
-
-
-
-
-
 # #### Merging Created Features
 
 # In[4]:
@@ -145,11 +137,6 @@ cat_cols = [
 ]
 cat_cols = [c for c in cat_cols if c in train.columns]
 cat_cols
-
-
-# In[ ]:
-
-
 
 
 
@@ -261,11 +248,6 @@ cat_cols_indices
 test.head()
 
 
-# In[ ]:
-
-
-
-
 
 # #### Catboost GroupKFold on Campaign ID
 
@@ -300,18 +282,6 @@ catb.save_model(file_name='catb-124-9142-gkf-camp.pkl')
 
 pd.DataFrame({"id": train_ids, "redemption_status": catb_oof}).to_csv('catb-124-9142-gkf-camp-oof.csv', index=False)
 pd.DataFrame({"id": test_ids, "redemption_status": catb_preds}).to_csv('catb-124-9142-gkf-camp-test.csv', index=False)
-
-
-# In[ ]:
-
-
-
-
-
-# In[ ]:
-
-
-
 
 
 # #### Catboost GroupKFold on CouponID

@@ -14,6 +14,7 @@ pd.options.display.max_rows=1000
 import numpy as np
 import multiprocessing as mp
 import time
+import sqlite3
 
 # In[7]:
 def get_mode(x):
@@ -48,7 +49,7 @@ def parse_dict_of_dict(_dict, _str = ''):
     return ret_dict
 """
 #新增函数，解决merge时的memoryerror
-def merge_with_chunk(target_df,chunk_df,output_file_name,on_cloums,how_tomerge):
+def merge_with_chunk(target_df,chunk_df,output_file_name,on_cloums,how_tomerge='left'):
     """
         函数用于分块合并两个表
         target_df：小表
@@ -69,43 +70,98 @@ def merge_with_chunk(target_df,chunk_df,output_file_name,on_cloums,how_tomerge):
     df=pd.read_csv(str(output_file_name),chunksize=100000)
     return df
 
+def csv2sqlite(csvPath,csvTablename):
+    db=sqlite3.connect("coupondata.db")
+    try:
+        for c in pd.read_csv(csvPath,chunksize=100000):
+            try:
+                #Append al rows to a new database table
+                c.to_sql(csvTablename,db,if_exists='append')
+            except Exception as e:
+                print("警告：转换过程中部分chunks导入数据库错误！")
+                pass
+            continue
+        db.close()
+        return True
+    except Exception as e:
+        print("转换过程出现异常,请重新检查")
+        return False
+
+def dfchunks2sqlite(df,tablename):
+    db=sqlite3.connect("coupondata.db")
+    try:
+        for c in df:
+            try:
+                #Append al rows to a new database table
+                c.to_sql(tablename,db,if_exists='append')
+            except Exception as e:
+                print("警告：转换过程中部分chunks导入数据库错误！")
+                pass
+            continue
+        db.close()
+        return True
+    except Exception as e:
+        print("转换过程出现异常,请重新检查")
+        return False
+
+def df2sqlite(df,tablename):
+    db=sqlite3.connect("coupondata.db")
+    try:
+        try:
+                #Append al rows to a new database table
+            df.to_sql(tablename,db,if_exist='fail')
+        except Exception as e:
+            print("警告：表已存在，不进行覆盖")
+            pass
+        db.close()
+        return True
+    except Exception as e:
+        print("转换过程出现异常,请重新检查")
+        db.close()
+        return False
+
 
 # In[2]:
 #数据文件目录，注意带上斜杠表示自己是个目录
 DATA_DIR = 'data/'
 #读取train数据
 train = pd.read_csv(DATA_DIR + 'train.csv')
+df2sqlite(train,'train')
 "train",train.shape 
 #读取train数据
 test = pd.read_csv(DATA_DIR + 'test_QyjYwdj.csv')
 "test", test.shape
+df2sqlite(test,'test')
 
 campaign_data = pd.read_csv(DATA_DIR + 'campaign_data.csv')
 "campaign_data", campaign_data.shape
 campaign_data['start_date'] = pd.to_datetime(campaign_data.start_date, format='%d/%m/%y')
 campaign_data['end_date'] = pd.to_datetime(campaign_data.end_date,  format='%d/%m/%y')
 campaign_data['duration'] = (campaign_data.end_date - campaign_data.start_date).dt.days 
+df2sqlite(campaign_data,'campaign_data')
 
 customer_demographics = pd.read_csv(DATA_DIR + 'customer_demographics.csv')
 "customer_demographics", customer_demographics.shape 
+df2sqlite(customer_demographics,'customer_demographics')
 
 customer_transaction_data = pd.read_csv(DATA_DIR + 'customer_transaction_data.csv')
 "customer_transaction_data", customer_transaction_data.shape 
 customer_transaction_data = customer_transaction_data.drop_duplicates()
-"customer_transaction_data", customer_transaction_data.shape 
-
+"customer_transaction_data", customer_transaction_data.shape
 customer_transaction_data['date'] = pd.to_datetime(customer_transaction_data.date, format='%Y-%m-%d')
+df2sqlite(customer_transaction_data,'customer_transaction_data') 
 
 item_data = pd.read_csv(DATA_DIR + 'item_data.csv')
 "item_data",item_data.shape
+df2sqlite(item_data,'item_data') 
 
 coupon_item_mapping = pd.read_csv(DATA_DIR + 'coupon_item_mapping.csv')
 "coupon_item_mapping", coupon_item_mapping.shape
-
+df2sqlite(coupon_item_mapping,'coupon_item_mapping')
 
 # In[4]:
 ##合并数据，新test是带有优惠券活动数据的
-##test和train表没有实际意义，拥有的字段是campaign_id，customer_id，coupon_id，是永安里链接各个表的枢纽
+##test和train表没有实际意义，拥有的字段是campaign_id，customer_id，coupon_id，是链接各个表的枢纽
 df_test = test.merge(campaign_data, how='left')
 df_test.shape
 df_test.head()
@@ -132,7 +188,7 @@ df_test.start_date.min(), df_test.end_date.max()
 df_all = pd.concat([df_train, df_test], sort=False, axis=0)#pd.concat（）函数，第一个参数要传递一个list之类的迭代器
 df_all.shape
 df_all.head()
-
+df2sqlite(df_all,'train_test_duplicate')
 # In[8]:
 ##合并交易数据和商品信息
 cust_transactions = customer_transaction_data.merge(item_data, on = 'item_id', how='left')
@@ -146,6 +202,7 @@ cust_transactions['other_discount'] = cust_transactions.other_discount.abs()
 cust_transactions['coupon_applied'] = (cust_transactions['coupon_discount'] > 0).astype(int)
 ##处理过后的交易表内含有：交易数据-商品信息-是否使用优惠券lable
 cust_transactions.head()
+df2sqlite(cust_transactions,tablename='cust_transactions_leftmerge_item')#cust_transactions数据量很大，清洗过数据后就存档
 
 # In[9]:
 ##对compaign-train-test合并后的数据进行去重
@@ -154,8 +211,7 @@ df_.shape
 
 # In[36]:
 #to do:debug here
-##内存错误，可能原因：NAN过多，或者单纯的内存不够
-###尝试解决方案1，分块merge->memory error解决成功
+##内存错误，可能原因：NAN过多，或者单纯的内存不够###尝试解决方案1，分块merge->memory error解决成功
 ####查看哪个表的更大
 #####复制出compaign-train-test中的顾客id和活动开始日期，保险起见进行去重
 df_x=pd.DataFrame(df_all,columns=['customer_id', 'start_date']).drop_duplicates()
@@ -167,71 +223,47 @@ cust_transactions.shape#(1321650, 11)
 ##连接后只保留了两张表都有的顾客（customer_id）的数据
 """暂时注释掉，跑一次这个函数时间代价比较大"""
 df_x=merge_with_chunk(df_x,cust_transactions,output_file_name='df_all_trans_item.csv',on_cloums=['customer_id'],how_tomerge='inner')
+# In[37]:
 ##含义：要筛选出某顾客收到优惠券的生效日期大于该顾客购物交易日期的数据
 ##当df的cloumn被赋值之后，可以采用df_x.start_date来引用这一列
 #to do:debug here
 ##尝试pd能不能一次性带动900+M的文件->带不动，一定要分节读取df_x现在是个chunks
 #df_x=pd.read_csv('df_all_trans_item.csv',chunksize=100000)
-for chunk in df_x:
-    ###相当于SELECT * FROM table WHERE start_date>chunk.date
-    chunk = chunk[chunk.start_date > chunk.date]#这个可以剔除列不符合要求的行么？可以
-    ###挨个chunk进行剔除，并分块写出数据以合并chunks
-    chunk.to_csv('df_all_trans_item_filter.csv', mode="a", header=True)
-###memory error:企图直接合并数据会报错df_temp=pd.concat(templist,axis=0)
+db=sqlite3.connect('coupondata.db')
+if db.execute("SELECT count(*) FROM sqlite_master WHERE type=\"table\" AND name=\"df_all_trans_item_filter\""):
+    for chunk in df_x:
+        ###相当于SELECT * FROM table WHERE start_date>chunk.date
+        chunk = chunk[chunk.start_date > chunk.date]#这个可以剔除列不符合要求的行么？可以
+        ###挨个chunk进行剔除，并分块写出数据以合并chunks
+        """chunk.to_csv('df_all_trans_item_filter.csv', mode="a", header=True)"""
+        ####将df_all_trans_item_filter.csv写入sqlite中进行聚合函数处理
+        chunk.to_sql('df_all_trans_item_filter',db,if_exists='append')
+else:
+    print('df_all_trans_item_filter已存在，请删除后再执行操作')
 del df_x#df_x使命告一段落，清理掉它，释放内存！
 
-
+# In[37]:
+#在sqlite中注册聚合函数，为了能够实现求标准差和加权移动平均数
+class std:
+    def __init__(self):
+        self.count=0
 # In[10]:
 #利用已有的变量，创造新的变量，并将新变量存入新表cust_hist_trans：
     #从某一优惠活动开始日，某顾客的购物商品数量，这些商品的总价、均价和方差
     #购买这些交易商品过程中总享受的“其他折扣”的总价和均价，优惠券折扣的总结和均价，优惠券使用次数的总数和平均数
-##对df_x进行排序，为groupby做准备
-###但是我查了查，其实也可以不排序进行分组把，只计数和求和，不在意顺序呀
-###排序这个事情计算量很大，预计要导出到sql中处理再导回来，先搁了
-###sort_values表示根据某一列排序
-#df_x = df_x.sort_values(by=['customer_id', 'date'])
-##agg()代表聚合函数,cust_hist_trans是新表，是用户历史交易数据统计表
-##创建一个空df作为cust_hist_trans的数据容器
-cust_hist_trans=pd.DataFrame()
-df_x_chunks=pd.read_csv('df_all_trans_item_filter.csv',chunksize=1000)
-# In[39]:
-##查看为什么数据结果和代码原作者不一样->那里没有去重？
-
-# In[34]:
-#分组数据的方差都不能分组计算求和
-#测试分块怎么为item_id计数
-cust_hist_trans_col_list=[]
-pieces=[]
-for x in df_x_chunks:
-    print(x.head(5))
-    df_x_3=pd.DataFrame(x,columns=['customer_id', 'start_date','item_id'])
-    pieces.append(df_x_3.groupby(['customer_id', 'start_date'])['item_id'].agg(['count']))
-    print(pieces[0].head(5))
-
-# In[37]:
-#测试分块怎么为item_id计数，并合并不同分块的计数结果
-cust_hist_trans_col_list.append(pd.concat(pieces).groupby(['customer_id', 'start_date'])['count'].agg(['sum']))
-print(cust_hist_trans_col_list[0].head(30))
-# In[38]:
-for col in ['selling_price','other_discount','coupon_discount','coupon_applied']:
-    pieces=[]
-    for x in df_x_chunks:
-        df_x_3=pd.DataFrame(x,columns=['customer_id', 'start_date',str(col)])
-        pieces.append(df_x_3.groupby(['customer_id', 'start_date']).agg(np.sum))
-    print(pieces[0].head(5))
-    cust_hist_trans_col_list.append(pd.concat(pieces))
-
-# In[35]:
-cust_hist_trans=pd.concat(cust_hist_trans_col_list,axis=1)
-cust_hist_trans.columns = ['_'.join(col).strip('_') for col in cust_hist_trans.columns.values]
-cust_hist_trans = cust_hist_trans.reset_index()
-cust_hist_trans.shape
-cust_hist_trans.head()
+##对df_all_trans_item_filter按照customer_id和date进行排序，为groupby做准备
+db.execute("SELECT * FROM \"df_all_trans_item_filter\" order by customer_id,date ASC")
+db.execute("CREATE INDEX customer_id_index on \"df_all_trans_item_filter\"(\"customer_id\")")
+db.commit()
+cursor=db.cursor()
+cursor.execute("""
+    SELECT 
+""")
 
 # In[11]:
 
 
-cust_hist_trans.to_csv('cust_hist_trans.csv', index=False)
+#cust_hist_trans.to_csv('cust_hist_trans.csv', index=False)
 
 
 # In[12]:
